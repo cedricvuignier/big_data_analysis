@@ -16,6 +16,11 @@ library(RQuantLib)
 library(bizdays)
 library(knitr)
 library(kableExtra)
+library(FactoMineR)
+library(factoextra)
+library(corrplot)
+library(broom)
+library(modelr)
 ```
 
 
@@ -23,7 +28,7 @@ library(kableExtra)
 station <- read_csv(here("data/station.csv"))
 status <- read_csv(here("data/avg_bike_available.csv"))
 trip <- read_csv(here("data/trip_fact.csv"))
-weather <- read_csv(here("data/weather.csv"))
+weather <- read_csv(here("data/weather_final.csv"))
 Fact_table <- read_csv(here("data/Fact_table.csv"))
 #We drop the NA, we delete the columns "X1_1" and "X1" and we filter only the observation whose number of trip (n_trip) is larger than 0. 
 Fact_table_filtered <- Fact_table %>% filter(n_trip>0) %>% drop_na() %>% select(-X1_1, -X1)
@@ -39,7 +44,7 @@ Fact_table_filtered$workingday <- as.numeric(Fact_table_filtered$workingday)
 
 Fact_table_filtered$ID_date <- ymd(Fact_table_filtered$ID_date) %>% as.POSIXct()
 #Remplacer 0 pour minuit en 24
-Fact_table_filtered$ID_hour[Fact_table_filtered$ID_hour == 0] <- 2
+Fact_table_filtered$ID_hour[Fact_table_filtered$ID_hour == 0] <- 24
 #Ajouter colonne count pour nombre de location par heure 
 Fact_table_filtered_cumul <- Fact_table_filtered %>% arrange(ID_date, ID_hour) %>% group_by(ID_date, ID_hour)%>% mutate(count= sum(n_trip))
 #on sélectionne les colonnes que l'on souhaite
@@ -198,7 +203,7 @@ bestdata  %>%
 
 ```{r}
  #Number of trips by hour and by quarter¶ #CORRECT
- bestdata <- bestdata%>%  mutate(quarter(date))
+ bestdata <- bestdata%>%  mutate(quarter=quarter(date))
  bestdata3 <- bestdata %>% arrange(hour, quarter)%>% group_by(hour, quarter) %>% summarise(totalperhour = sum(count))
 
  bestdata3 %>%
@@ -299,7 +304,7 @@ bestdata4 %>% ggplot(aes(month, totalpermonth)) +
 ```
 
 ```{r}
-#Total number of trips by day of the week¶
+#Total number of trips by day of the week
 bestdata5 <- bestdata %>% group_by(weekday) %>% summarise(totalperday = sum(count))
 
 bestdata5 %>% ggplot(aes(weekday, totalperday)) +
@@ -358,11 +363,41 @@ bestdata6 %>% ggplot(aes(day, totalperdayofmonth)) +
 ```
 
 ```{r}
-#Ensuite, on va comparer les semaines, les weekend et les jours de pluie vs les jours de beau temps. 
-#Est-ce que le temps d'utilisation du vélo dépend du vent 
-#Which route is the most popoular 
-#Which stations are the most popular 
+#Which route is the most popoular
+popular_trip<- merge(x = trip, y=station, by.x = "ID_station_start", by.y="id") 
+popular_trip<- merge(x = popular_trip, y=station, by.x = "ID_station_end", by.y="id")
 
+popular_trip <-
+  popular_trip %>% select(
+    ID_date,
+    ID_weekdays,
+    ID_hour,
+    ID_station_start,
+    name.x,
+    city.x,
+    ID_station_end,
+    name.y,
+    city.y,
+    mean_duration,
+    n_trip
+  ) %>% group_by(ID_station_start,
+                 name.x,
+                 city.x ,
+                 ID_station_end,
+                 name.y,
+                 city.y) %>% summarise(sum = sum(n_trip)) %>% arrange(desc(sum)) 
+
+popular_trip%>% head(5) %>% kable() %>% kable_styling(bootstrap_options = "striped")
+
+```
+
+
+```{r}
+#Which stations are the most popular (start station) 
+popular_station<- merge(x = trip, y=station, by.x = "ID_station_start", by.y="id") 
+
+popular_station<- popular_station %>% group_by(ID_station_start, name) %>% summarise(sum = (sum(n_trip))) %>% arrange(desc(sum))
+popular_station %>% head(5) %>% kable() %>% kable_styling(bootstrap_options = "striped")
 ```
 
 ```{r}
@@ -401,28 +436,68 @@ subtitle = str_wrap("")
 available_bikes %>% select(ID_station, name, n_available, city)%>% group_by(ID_station, name, city) %>% summarise(total_available = sum(n_available)) %>% arrange(desc(total_available))%>% head(5) %>%kable() %>% kable_styling(bootstrap_options = "striped")
 
 ```
+Only the station number 50 is, at the same time, among the most popular stations and among the stations with the most available bikes. 
+
 
 ```{r}
 #Ensuite, on va comparer les semaines, les weekend et les jours de pluie vs les jours de beau temps. 
 #Est-ce que le temps d'utilisation du vélo dépend du vent 
 ```
 
-```{r}
 
+MODELING
+
+
+```{r contribution, fig.height=15, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+
+set.seed(234)
+index <- sample(x=c(1,2), size=nrow(AFC), replace=TRUE, prob=c(0.75,0.25)) # 1==training set, 2==test set
+dat.tr <- AFC[index==1,]
+dat.te <- AFC[index==2,]
+# 1==training set, 2==test set
 ```
 
 ```{r}
+library(ranger)
+
+
+ranger.rf2 <- ranger(count~ year + hour + mean_temperature + mean_wind_speed + mean_visibility + mean_humidity+ mean_precipitation_mm + weekday_num+ workingday_num + day + month ,  data = dat.tr, importance = "impurity")
+
+imp.df <- data.frame(variable=names(importance(ranger.rf2)),
+                     importance=importance(ranger.rf2))
+ggplot(imp.df, 
+       aes(x=reorder(variable,importance), y=importance,fill=importance))+
+  geom_bar(stat="identity", position="dodge") + 
+  coord_flip()+
+  ylab("Variable Importance")+
+  xlab("")+
+  ggtitle("Information Value Summary")+
+  guides(fill=F) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "#993333",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5) 
+
+rf2.pred.tr <- ranger.rf2$predictions
+rf2.pred.te <- predict(ranger.rf2, data=dat.te)$predictions
+
+PredictionRF <- data.frame(PredictionRF=rf2.pred.te)
+
+plot(dat.te$count ~ rf2.pred.te, 
+     pch = 20, 
+     xlab="Predictions", 
+     ylab="Duree reelle",
+     main = "Observations prédites comparées aux observations réelles") + 
+  abline(0, 1, col = "red", size = 3)
 
 ```
 
-```{r}
 
-```
-
-```{r}
-
-```
-
-```{r}
-
-```
