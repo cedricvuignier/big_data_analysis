@@ -5,7 +5,7 @@ date: ''
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
 library(readr)
 library(here)
 library(tidyverse)
@@ -23,37 +23,41 @@ library(broom)
 library(modelr)
 ```
 
+First, we load our databases
 
-```{r}
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#We load the different databases
 station <- read_csv(here("data/station.csv"))
 status <- read_csv(here("data/avg_bike_available.csv"))
 trip <- read_csv(here("data/trip_fact.csv"))
 weather <- read_csv(here("data/weather_final.csv"))
 Fact_table <- read_csv(here("data/Fact_table.csv"))
-#We drop the NA, we delete the columns "X1_1" and "X1" and we filter only the observation whose number of trip (n_trip) is larger than 0. 
+#In the database "Fact_table" we drop the NA, we delete the columns "X1_1" and "X1" and we filter only the observation whose number of trip (n_trip) is larger than 0. 
 Fact_table_filtered <- Fact_table %>% filter(n_trip>0) %>% drop_na() %>% select(-X1_1, -X1)
 ```
 
-We load the USA calendar in order to know the working days.
+Then, we clean our databases and create a new one named "bestdata". This database will be very important for the continuation. 
 
-```{r}
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#We load the american calendar in order to know the working days
 load_quantlib_calendars(ql_calendars = "UnitedStates", from='2013-01-01', to='2015-12-31')
-
+#We create a column for the working days and give it a numeric value
 Fact_table_filtered <-Fact_table_filtered %>% mutate(workingday=is.bizday(ID_date, "QuantLib/UnitedStates"))
 Fact_table_filtered$workingday <- as.numeric(Fact_table_filtered$workingday)
-
+#We definite the ID_date as a date format
 Fact_table_filtered$ID_date <- ymd(Fact_table_filtered$ID_date) %>% as.POSIXct()
-#Remplacer 0 pour minuit en 24
+#We replace all 0 hour into 24.
 Fact_table_filtered$ID_hour[Fact_table_filtered$ID_hour == 0] <- 24
-#Ajouter colonne count pour nombre de location par heure 
-Fact_table_filtered_cumul <- Fact_table_filtered %>% arrange(ID_date, ID_hour) %>% group_by(ID_date, ID_hour)%>% mutate(count= sum(n_trip))
-#on sélectionne les colonnes que l'on souhaite
-Fact_table_filtered_cumul <-
-  Fact_table_filtered_cumul %>% select(
+#We add a colum to have the number of location per hour
+Fact_table_filtered<- Fact_table_filtered %>% arrange(ID_date, ID_hour) %>% group_by(ID_date, ID_hour)%>% mutate(count= sum(n_trip))
+#We select the column that we want to have in our new refined database 
+Fact_table_filtered <-
+  Fact_table_filtered %>% select(
     ID_date,ID_year,
     ID_hour,
     workingday,
     count,
+    mean_duration,
     mean_temperature,
     mean_wind_speed,
     mean_visibility,
@@ -61,230 +65,135 @@ Fact_table_filtered_cumul <-
     mean_precipitation_mm
   )
 
-#on enlève les lignes en doublons 
-bestdata<-unique(Fact_table_filtered_cumul)
+#We remove the doublons and rename the data into "bestdata"
+bestdata<-unique(Fact_table_filtered)
 
-#On ajoute une ligne cumulative pour avoir le nombre cumulé de location par jour
-bestdata <- bestdata %>% arrange(ID_date, ID_hour) %>% group_by(ID_date)%>% mutate(cumul = cumsum(count))
-
-#On rajoute les jours de la semaine
+#Adding the weekday
 bestdata<- bestdata %>% mutate(weekday = wday(ID_date, label = TRUE))
 
-#Changer l'ordre des colonnes
-bestdata <- bestdata[, c(1, 2, 3, 12, 4, 5, 11, 6,7,8, 9, 10 )]  
-#renommer les colonnes
+#Changing the column's order
+bestdata <- bestdata[, c(1, 2, 3, 12,4, 5, 11, 6,7,8, 9, 10 )]  
+#Renaming the columns and changing the date format
 bestdata <- bestdata %>% rename("date"=ID_date,"year"= ID_year , "hour"=ID_hour)
 bestdata$date<- format(as.POSIXct(bestdata$date,format='%Y/%m/%d %H:%M:%S'),format='%Y/%m/%d')
 
 
 ```
 
-```{r}
-#on peut changer les dates pour analyser telle ou telle période 
+## Exploratory data analysis 
 
-bestdata  %>% summarise(sum = sum(count)) %>% 
-  filter(date >= ymd("2013-08-29") &
-           date < ymd("2013-09-07")) %>% 
-  ggplot() + 
-  geom_line(aes(date, sum, group = 1)) + 
-  labs(x = "Date", y = "Number of rentals", title = "Rental curve")
+It is important to know that we only have one entire year in the data. The periods of our data is the following: 
 
-#année 2013
-bestdata %>% filter(year == 2013) %>% summarise(sum = sum(count)) %>%   
-  ggplot() + 
-  geom_line(aes(date, sum, group = 1)) + 
-  labs(x = "Date", y = "Number of rentals", title = "Rental curve")
+- 29th of August 2013 --> 31 of December 2013
+- 1st of January 2014 --> 31 of December 2014
+- 1st of January 2015 --> 31 of August 2015
 
-#année 2014
-bestdata %>% filter(year == 2014) %>% summarise(sum = sum(count)) %>%   
-  ggplot() + 
-  geom_line(aes(date, sum, group = 1)) + 
-  labs(x = "Date", y = "Number of rentals", title = "Rental curve")
 
-#année 2015
-bestdata %>% filter(year == 2015) %>% summarise(sum = sum(count)) %>%   
-  ggplot() + 
-  geom_line(aes(date, sum, group = 1)) + 
-  labs(x = "Date", y = "Number of rentals", title = "Rental curve")
+### Rentals per year 
 
-#On peut voir une certaine saisonnalité 
+For year 2013, apart from the seasonality, we can obseve a diminishing trend when going to winter.
 
-bestdata %>% 
-  filter(date>= ymd("2014-01-01") &
-           date < ymd("2014-01-31"))  %>% 
-  transmute(days_week = date(date), workingday, count) %>% 
-  group_by(days_week) %>% 
-  summarise(sum = sum(count)) %>% 
-  ggplot(aes(x=days_week, y=sum))+
-  geom_line() +
-  scale_x_date(date_labels = "%a", date_breaks = "1 day")+
-  labs(title = "Daily rental for January 2014",   
-       subtitle = str_wrap(""))+
-  scale_y_continuous(breaks = seq(0 , 6000 , by = 500), labels = function(x) format(x, big.mark = ",",
-                                                                                    scientific = FALSE))+
-  theme_bw() +
-  theme(panel.grid.major = element_line(color="grey", size = 0.1)) 
 
-#By analyzing the period from september to december 2013, we can see that Saturday is the weaks day in terms of rentals. Tuesday is in majority the best rental day. 
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Here, we can use the following codes to plot any period of time
+#bestdata  %>% summarise(sum = sum(count)) %>%
+  #filter(date >= ymd("2013-08-29") &
+           #date < ymd("2013-09-07")) %>%
+  #ggplot() +
+  #geom_line(aes(date, sum, group = 1)) +
+  #labs(x = "Date", y = "Number of rentals", title = "Rental curve")
 
-```
-
-```{r}
-#Plot the average number of total rentals per hour using different colors for different week days as a line chart.
-
-bestdata  %>% 
-  group_by(weekday, hour) %>% 
-  summarize(avg_count = mean(count)) %>%
+#Year 2013
+bestdata %>% filter(year == 2013) %>% summarise(sum = sum(count)) %>%
   ggplot() +
-  geom_line(aes(hour, avg_count, color = weekday)) + 
-  labs(
-    x = "Hour",
-    y = "Average number of rentals",
-    title = "Rental curves depending on the day of the week",
-    color = "Day of week"
-  )
-```
-
-```{r}
-#Plot the same chart as in __3.d__, but use different colors depending on whether the day is working or not.
-
-bestdata$workingday[bestdata$workingday == 1] <- "TRUE"
-bestdata$workingday[bestdata$workingday == 0] <- "FALSE"
-
-bestdata  %>% 
-  group_by(workingday, hour) %>%
-  summarize(avg_count = mean(count)) %>%
-  ggplot() + 
-  geom_line(aes(hour, avg_count, color = workingday)) + 
-  labs(
-    x = "Hour",
-    y = "Average number of rentals",
-    title = "Rental curves depending on the day of the week",
-    color = "Working day"
+  geom_line(aes(date, sum, group = 1)) +
+  labs(x = "Date", y = "Number of rentals", title = "Rental curve for 2013") + scale_x_discrete(
+    breaks = seq( by =10),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE)
   )
 
+#Apart from the seasonality, we can obseve a diminishing trend when going to winter
 ```
 
-```{r}
-#Number of trips by hour, across the year¶ CORRECT
 
- bestdata2 <- bestdata %>% arrange(hour)%>% group_by(hour) %>% summarise(totalperhour = sum(count))
- bestdata2 <- reshape2::melt(bestdata2$totalperhour)
- bestdata2 <-  bestdata2 %>% mutate(hour=(1:24))
- 
- bestdata2 %>%
-   ggplot(aes(hour, value)) +
-   geom_bar(stat = "identity") +
-   labs (
-     x = "Hour",
-     y = "Total number of bicycle trips",
-     title = "Number of trips by hour, across the year
-",
-     subtitle = str_wrap(
-       ""
-     )
-   ) +
-   theme(
-     axis.text.x = element_text(
-       face = "bold",
-       color = "black",
-       size = 12,
-       angle = 45
-     ),
-     axis.text.y = element_text(face = "bold", size = 10),
-     panel.grid.minor = element_line(color = "grey", size = 0.1)
-   ) +
-   theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
-   ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
- 
- 
+In 2014, we can observe a certain seasonality for each week and an increasing trend over the year.
 
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Year 2014
+bestdata %>% filter(year == 2014) %>% summarise(sum = sum(count)) %>%
+  ggplot() +
+  geom_line(aes(date, sum, group = 1)) +
+  labs(x = "Date", y = "Number of rentals", title = "Rental curve for 2014") + scale_x_discrete(
+    breaks = seq( by =10),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE)
+  )
+
+#We can observe a certain seasonality for each week and an increasing trend over the year
 ```
 
-```{r}
- #Number of trips by hour and by quarter¶ #CORRECT
- bestdata <- bestdata%>%  mutate(quarter=quarter(date))
- bestdata3 <- bestdata %>% arrange(hour, quarter)%>% group_by(hour, quarter) %>% summarise(totalperhour = sum(count))
 
- bestdata3 %>%
-   ggplot(aes(hour, totalperhour)) +
-   geom_bar(stat = "identity") +
-   labs (
-     x = "Hour",
-     y = "Total number of bicycle trips",
-     title = "Number of trips by hour, across the year
-",
-     subtitle = str_wrap(
-       ""
-     )
-   ) +
-   theme(
-     axis.text.x = element_text(
-       face = "bold",
-       color = "black",
-       size = 12,
-       angle = 45
-     ),
-     axis.text.y = element_text(face = "bold", size = 10),
-     panel.grid.minor = element_line(color = "grey", size = 0.1)
-   ) +
-   theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +   scale_x_continuous(breaks = seq(2, 24 , by = 2), labels = function(x) format(x, big.mark = ",", scientific = FALSE))+
+In 2015, we observe a certain seasonality for each week but without any trend. 
 
-   ggpubr::rotate_x_text(angle = 360, hjust = 0.5)+   facet_wrap(~quarter)
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Year 2015
+bestdata %>% filter(year == 2015) %>% summarise(sum = sum(count)) %>%
+  ggplot() +
+  geom_line(aes(date, sum, group = 1)) +
+  labs(x = "Date", y = "Number of rentals", title = "Rental curve for 2015") + scale_x_discrete(
+    breaks = seq( by =10),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE)
+  )
+
+#We can observe a certain seasonality for each week but without any trend
+```
+
+### Seasonality (Summer 2015)
+
+Below, we will analyse a certain period of time (Summer 2015) in oder to see the seasonality more precisely. In addition, we will use the year 2015 because we did not observe any clear trend in the previous graphs.  
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+bestdata %>%
+  filter(date >= ymd("2015-08-01") &
+           date < ymd("2015-08-31"))  %>%
+  transmute(days_week = date(date), workingday, count) %>%
+  group_by(days_week) %>%
+  summarise(sum = sum(count)) %>%
+  ggplot(aes(x = days_week, y = sum)) +
+  geom_line() +
+  scale_x_date(date_labels = "%a", date_breaks = "1 day") +
+  labs(title = "Daily rental for August 2015",
+       subtitle = str_wrap("There is an important seasonality each week, the peak is mainly on Tuesday")) +
+  theme_bw() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) 
 
 
 
 ```
 
-```{r}
-#Trip duration CORRECT
+By analyzing the period from 1st of August to 31th of August 2015, we can see that Sunday is the weakest day in terms of rentals. Tuesday is in majority the best rental day. 
 
- Fact_table_filtered <- Fact_table_filtered %>% mutate(duration_min = (mean_duration / 60)) 
- distribution <- Fact_table_filtered %>% group_by(duration_min) %>% summarise(total = sum(n_trip)) %>%  filter(duration_min <=60) 
- distribution <- distribution %>% mutate(minute=trunc(duration_min )) %>% group_by(minute) %>% summarise(total = sum(total))
+### Number of rentals per month from September 2013 to August 2015
 
- distribution %>%
-   ggplot(aes(minute, total)) +
-   geom_bar(stat = "identity") +
-   labs (
-     x = "Trip duration [min]",
-     y = "Total number of bicycle trips",
-     title = "Distribution of bike trip duration in minute
-",
-     subtitle = str_wrap(
-       ""
-     )
-   ) +
-   theme(
-     axis.text.x = element_text(
-       face = "bold",
-       color = "black",
-       size = 12,
-       angle = 45
-     ),
-     axis.text.y = element_text(face = "bold", size = 10),
-     panel.grid.minor = element_line(color = "grey", size = 0.1)
-   ) +
-   theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +   scale_x_continuous(breaks = seq(1, 60 , by = 2), labels = function(x) format(x, big.mark = ",", scientific = FALSE))+
-   
-   ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
- 
-```
-
-```{r}
-#Number of bike trips per month  #correct
-bestdata4 <- bestdata %>% group_by(month=month(date)) %>% summarise(totalpermonth = sum(count))
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Number of bike trips per month 
+#We create a new dataframe to have to number of trips (number of rented bikes) per month 
+bestdata4 <- bestdata %>% group_by(month = month(date)) %>% summarise(totalpermonth = sum(count))
 
 bestdata4 %>% ggplot(aes(month, totalpermonth)) +
   geom_bar(stat = "identity") +
   labs (
     x = "Month",
     y = "Total number of bicycle trips",
-    title = "Number of trips by month
+    title = "Number of trips per month
 ",
-    subtitle = str_wrap(
-      ""
-    )
+subtitle = str_wrap("November and December are the less profitable months for rentals, summer is the best period")
   ) +
   theme(
     axis.text.x = element_text(
@@ -297,44 +206,25 @@ bestdata4 %>% ggplot(aes(month, totalpermonth)) +
     panel.grid.minor = element_line(color = "grey", size = 0.1)
   ) +
   theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
-  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)+
-  scale_x_continuous(breaks = seq(1, 12 ), labels = function(x) format(x, big.mark = ",", scientific = FALSE))
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5) +
+  scale_x_continuous(
+    breaks = seq(1, 12),
+    labels = function(x)
+      format(x, big.mark = ",", scientific = FALSE)
+  )
 
 
 ```
 
-```{r}
-#Total number of trips by day of the week
-bestdata5 <- bestdata %>% group_by(weekday) %>% summarise(totalperday = sum(count))
+Summer is the best periode for rentals and winter is the worst one. 
 
-bestdata5 %>% ggplot(aes(weekday, totalperday)) +
-  geom_bar(stat = "identity") +
-  labs (
-    x = "Day of the week",
-    y = "Total number of bicycle trips",
-    title = "Number of trips by weekday
-",
-    subtitle = str_wrap(
-      ""
-    )
-  ) +
-  theme(
-    axis.text.x = element_text(
-      face = "bold",
-      color = "black",
-      size = 12,
-      angle = 45
-    ),
-    axis.text.y = element_text(face = "bold", size = 10),
-    panel.grid.minor = element_line(color = "grey", size = 0.1)
-  ) +
-  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
-  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
-```
+### Number of rentals per day of month from September 2013 to August 2015
 
-```{r}
-#Total number of trips by day of the month¶
-bestdata6 <- bestdata %>% group_by(day=day(date)) %>% summarise(totalperdayofmonth = sum(count))
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Total number of trips per day of the month
+#We create a new dataframe to have the number of trips per day of month (from 1 to 31) across the whole period of our data
+bestdata6 <- bestdata %>% group_by(day = day(date)) %>% summarise(totalperdayofmonth = sum(count))
 
 bestdata6 %>% ggplot(aes(day, totalperdayofmonth)) +
   geom_bar(stat = "identity") +
@@ -343,9 +233,7 @@ bestdata6 %>% ggplot(aes(day, totalperdayofmonth)) +
     y = "Total number of bicycle trips",
     title = "Number of trips by day of month
 ",
-    subtitle = str_wrap(
-      ""
-    )
+subtitle = str_wrap("")
   ) +
   theme(
     axis.text.x = element_text(
@@ -362,11 +250,255 @@ bestdata6 %>% ggplot(aes(day, totalperdayofmonth)) +
 
 ```
 
+Without any surprise, the day 31th has less rentals because this day does not occur each month. 
+
+
+### Number of rentals per weekday from September 2013 to August 2015
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Total number of trips by day of the week
+#We create a new dataframe to have the number of trips per day weekday
+bestdata5 <- bestdata %>% group_by(weekday) %>% summarise(totalperday = sum(count))
+
+bestdata5 %>% ggplot(aes(weekday, totalperday)) +
+  geom_bar(stat = "identity") +
+  labs (
+    x = "Day of the week",
+    y = "Total number of bicycle trips",
+    title = "Number of trips per weekday
+",
+subtitle = str_wrap("Large difference between the weekend and the working days")
+  ) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "black",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
+```
+
+Rentals is not at its best during the weekend. 
+
+### Rentals per weekday and per hour
+
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Plotting the average number of total rentals per hour using different colors for different week days as a line chart.
+bestdata  %>%
+  group_by(weekday, hour) %>%
+  summarize(avg_count = mean(count)) %>%
+  ggplot() +
+  geom_line(aes(hour, avg_count, color = weekday)) +
+  labs(
+    x = "Hour",
+    y = "Average number of rentals",
+    title = "Rental curves depending on the day of the week and the hour of the day",
+    color = "Day of week"
+  ) + scale_x_continuous(
+    breaks = seq(0,24, by =2),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE))
+```
+
+The peaks is at 8 o'clock in the morning and at 5 o'clock in the evening. These hours correspond to travel to the workplace in the morning and returning home in the evening. This confirms our hypothesis that the bike rental is made for journeys between the house and the workplace.
+
+### Rentals per working day and per hour
+
+Below we plot the same gaphic as previously but we highlight the working days and the weekend. 
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Plotting the same chart as previously, but using different colors depending on whether the day is working or not.
+bestdata$workingday[bestdata$workingday == 1] <- "TRUE"
+bestdata$workingday[bestdata$workingday == 0] <- "FALSE"
+
+bestdata  %>%
+  group_by(workingday, hour) %>%
+  summarize(avg_count = mean(count)) %>%
+  ggplot() +
+  geom_line(aes(hour, avg_count, color = workingday)) +
+  labs(
+    x = "Hour",
+    y = "Average number of rentals",
+    title = "Rental curves depending on working days and on hour of the day",
+    color = "Working day"
+  )+ scale_x_continuous(
+    breaks = seq(0,24, by =2),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE))
+
+```
+
+### Rentals per hour from September 2013 to August 2015
+
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Number of trips by hour, across the year
+#We create a new dataframe in order to analyze the total of rentals per hour 1 to 24 during the whole period of our data (September 2013 to August 2015) 
+bestdata2 <- bestdata %>% arrange(hour) %>% group_by(hour) %>% summarise(totalperhour = sum(count))
+bestdata2 <- reshape2::melt(bestdata2$totalperhour)
+bestdata2 <-  bestdata2 %>% mutate(hour = (1:24))
+ 
+bestdata2 %>%
+  ggplot(aes(hour, value)) +
+  geom_bar(stat = "identity") +
+  labs (
+    x = "Hour",
+    y = "Total number of bicycle trips",
+    title = "Number of trips per hour over the whole data period
+",
+subtitle = str_wrap("Bike renting is used mainly by the workers during the week ")
+  ) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "black",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)  + scale_x_continuous(
+    breaks = seq(0,24, by =2),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE))
+ 
+ 
+
+```
+
+### Rentals per quarter and per hour from September 2013 to August 2015
+
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Number of trips by hour and by quarter
+#We create a new variable named "quarter" and creating a new dataframe in order to have the number of rentals per hour and per quarter
+bestdata <- bestdata %>%  mutate(quarter = quarter(date))
+bestdata3 <- bestdata %>% arrange(hour, quarter) %>% group_by(hour, quarter) %>% summarise(totalperhour = sum(count))
+
+bestdata3 %>%
+  ggplot(aes(hour, totalperhour)) +
+  geom_bar(stat = "identity") +
+  labs (
+    x = "Hour",
+    y = "Total number of bicycle trips",
+    title = "Number of trips by hour and by quarter",
+subtitle = str_wrap("We have approimately the same distribution in each quarter")
+  ) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "black",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +   scale_x_continuous(
+    breaks = seq(2, 24 , by = 2),
+    labels = function(x)
+      format(x, big.mark = ",", scientific = FALSE)
+  ) +
+  
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5) +   facet_wrap( ~ quarter) + scale_x_continuous(
+    breaks = seq(0,24, by =2),
+    labels = function(x)
+      format(x, big.mark = ",",
+             scientific = FALSE))
+
+```
+
+
+### Trip duration in minutes from September 2013 to August 2015
+
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Distribution of the trip duration (number of minutes using a bicycle)
+#We filter the number of minutes to have only trips during less than 60 minutes because trips of more than 60 minutes are quite rare and distort our graphs
+Fact_table_filtered <- Fact_table_filtered %>% mutate(duration_min = (mean_duration / 60))
+distribution <- Fact_table_filtered %>% group_by(duration_min) %>% summarise(total = sum(count)) %>%  filter(duration_min <= 60)
+#We need to trunc our different time values in order to have the duration of trips for every minute. Thanks to the following code, we reach a distribution of the trips' durations.                                                                                              
+distribution <- distribution %>% mutate(minute = trunc(duration_min)) %>% group_by(minute) %>% summarise(total = sum(total))
+
+distribution %>%
+  ggplot(aes(minute, total)) +
+  geom_bar(stat = "identity") +
+  labs (
+    x = "Trip duration [min]",
+    y = "Total number of bicycle trips",
+    title = "Distribution of trip duration in minutes
+",
+subtitle = str_wrap("")
+  ) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "black",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +   scale_x_continuous(
+    breaks = seq(0, 60 , by = 2),
+    labels = function(x)
+      format(x, big.mark = ",", scientific = FALSE)
+  ) +
+  
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
+ 
+```
+
 ```{r}
-#Which route is the most popoular
+#We deliver the same plot as the previous one but we also display the workingdays. 
+
+
+distribution_workingday<- bestdata %>% mutate(duration_min = (mean_duration / 60)) %>% group_by(duration_min, workingday) %>% summarise(total = sum(count)) %>%  filter(duration_min <= 60) %>% mutate(minute = trunc(duration_min)) %>% group_by(minute,workingday) %>% summarise(total = sum(total)) 
+
+distribution_workingday %>%  ggplot(aes(minute, total,group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday))) +
+  geom_bar(stat = "identity") +
+  labs (
+    x = "Trip duration [min]",
+    y = "Total number of bicycle trips",
+    title = "Distribution of trip duration in minutes
+",
+subtitle = str_wrap("")
+  )  +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +   scale_x_continuous(
+    breaks = seq(0, 60 , by = 2),
+    labels = function(x)
+      format(x, big.mark = ",", scientific = FALSE)
+  ) +
+  
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)+ theme_bw()
+
+```
+
+We can observe that during the working days, the most frequent duration is the same than during the weekend (about 7 minutes).
+
+### Most popular routes over the whole data period
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Most popular routes
+#We create a new dataframe by merging the "trip" dataset and the "station" dataset
 popular_trip<- merge(x = trip, y=station, by.x = "ID_station_start", by.y="id") 
 popular_trip<- merge(x = popular_trip, y=station, by.x = "ID_station_end", by.y="id")
 
+#We select the variables that we want to have in our new dataframe and we group it by the name of the stations. Also, we count the number of trips for each routes.
 popular_trip <-
   popular_trip %>% select(
     ID_date,
@@ -385,28 +517,39 @@ popular_trip <-
                  city.x ,
                  ID_station_end,
                  name.y,
-                 city.y) %>% summarise(sum = sum(n_trip)) %>% arrange(desc(sum)) 
+                 city.y) %>% summarise(sum = sum(n_trip)) %>% arrange(desc(sum))
 
-popular_trip%>% head(5) %>% kable() %>% kable_styling(bootstrap_options = "striped")
+popular_trip %>% head(5) %>% kable(caption = "Most popular routes") %>% kable_styling(bootstrap_options = "striped")
 
 ```
 
+### Most popular stations over the whole data period
 
-```{r}
-#Which stations are the most popular (start station) 
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#WMost popular stations
+#We create a new dataframe to display the number of trips for the variable "ID_station_start"
 popular_station<- merge(x = trip, y=station, by.x = "ID_station_start", by.y="id") 
 
+#We make a table to show the classification
 popular_station<- popular_station %>% group_by(ID_station_start, name) %>% summarise(sum = (sum(n_trip))) %>% arrange(desc(sum))
-popular_station %>% head(5) %>% kable() %>% kable_styling(bootstrap_options = "striped")
+popular_station %>% head(5) %>% kable(caption = "Most popular stations") %>% kable_styling(bootstrap_options = "striped")
 ```
+The most frequented stations are the same that sations belonging to the most frequented routes. 
 
-```{r}
-#Bike available distribution 
-#name of stations
-available_bikes<- merge(x = status, y=station, by.x = "ID_station", by.y="id") %>% select(-X1, -lat, -long, -dock_count)
+### Availability distribution of bikes over the whole data period
 
-status %>% group_by(ID_station) %>% summarise(total_available = sum(n_available)) %>% 
-  ggplot(aes(x = reorder(ID_station, -total_available), y = total_available)) +
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Bike availability distribution 
+#We want to know which stations have the biggest available number of bikes across the whole period of our data. To do it, we merge the "status" dataset and the "station" dataset. We remove the useless ariables. 
+available_bikes <-
+  merge(x = status,
+        y = station,
+        by.x = "ID_station",
+        by.y = "id") %>% select(-X1,-lat,-long,-dock_count)
+
+#Then, we group the stations' name and compute the sum of the available bikes ("n_available")
+status %>% group_by(ID_station) %>% summarise(total_available = sum(n_available)) %>%
+  ggplot(aes(x = reorder(ID_station,-total_available), y = total_available)) +
   geom_bar(stat = "identity", width = 0.4) +
   labs (
     x = "Station",
@@ -429,42 +572,317 @@ subtitle = str_wrap("")
   ggpubr::rotate_x_text(angle = 360, hjust = 0.5) +   scale_x_discrete(
     breaks = seq(2, 84),
     labels = function(x)
-      format(x, big.mark = ",", scientific = FALSE)
+      format(x, big.mark = ",", scientific = FALSE
+      )
   )
+```
 
+Here, we display a table ouf the first 5 stations that have the biggest number of available bikes.
 
-available_bikes %>% select(ID_station, name, n_available, city)%>% group_by(ID_station, name, city) %>% summarise(total_available = sum(n_available)) %>% arrange(desc(total_available))%>% head(5) %>%kable() %>% kable_styling(bootstrap_options = "striped")
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#Here we diplay a table ouf the first 5 stations that have the biggest number of available bikes
+available_bikes %>% 
+  select(ID_station, name, n_available, city) %>% 
+  group_by(ID_station, name, city) %>% 
+  summarise(total_available = sum(n_available)) %>% 
+  arrange(desc(total_available)) %>% 
+  head(5) %>%
+  kable(caption = "Stations having the biggest number of available bikes") %>% 
+  kable_styling(bootstrap_options = "striped")
 
 ```
+
 Only the station number 50 is, at the same time, among the most popular stations and among the stations with the most available bikes. 
+
+### Weather
 
 
 ```{r}
-#Ensuite, on va comparer les semaines, les weekend et les jours de pluie vs les jours de beau temps. 
-#Est-ce que le temps d'utilisation du vélo dépend du vent 
+library(viridis)
+
+bestdata %>% group_by(date, workingday,mean_humidity) %>% summarise(count=sum(count)) %>% 
+  ggplot(aes(count,
+    mean_humidity,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Total rentals",
+    y = "Average humidity",
+    title = "Number of rentals and average humidity",
+    subtitle = str_wrap(
+      "There is no trend between the average humidity and the number of rentals"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+
+
 ```
 
+```{r}
+bestdata %>% group_by(date, workingday,mean_precipitation_mm) %>% summarise(count=sum(count)) %>% 
+  ggplot(aes(count,
+    mean_precipitation_mm,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Total rentals",
+    y = "Amount of precipitation in milimeters",
+    title = "Number of rentals and amount of precipitation",
+    subtitle = str_wrap(
+      "There is no trend between the amount of precipitation and the number of rentals"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
 
-MODELING
+```{r}
+bestdata %>% group_by(date, workingday,mean_temperature) %>% summarise(count=sum(count)) %>% 
+  ggplot(aes(count,
+    mean_temperature,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Total rentals",
+    y = "Average temperature",
+    title = "Number of rentals and average temperature",
+    subtitle = str_wrap(
+      "There is no trend between the average temperature and the number of rentals"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+
+```
+
+```{r}
+bestdata %>% group_by(date, workingday,mean_wind_speed) %>% summarise(count=sum(count)) %>% 
+  ggplot(aes(count,
+    mean_wind_speed,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Total rentals",
+    y = "Average wind speed",
+    title = "Number of rentals and average wind speed",
+    subtitle = str_wrap(
+      "There is no trend between the average wind speed and the number of rentals"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+```{r}
+bestdata %>% group_by(date, workingday,mean_visibility) %>% summarise(count=sum(count)) %>% 
+  ggplot(aes(count,
+    mean_visibility,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Total rentals",
+    y = "Average visibility",
+    title = "Number of rentals and average visibility",
+    subtitle = str_wrap(
+      "There is no trend between the average visibility and the number of rentals"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+```{r}
+bestdata <- bestdata %>% mutate(duration_min = (mean_duration / 60))
+
+bestdata %>% group_by(date, workingday, mean_humidity) %>% summarise(duration_min=mean(duration_min)) %>% filter(duration_min <= 60) %>% 
+  ggplot(aes(duration_min,
+    mean_humidity,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average duration of the trips in minutes",
+    y = "Average humidity",
+    title = "Average duration in minutes and average of humidity",
+    subtitle = str_wrap(
+      "There is no trend between the average humidity and the average duration of the trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_precipitation_mm) %>% summarise(duration_min=mean(duration_min)) %>% filter(duration_min <= 60) %>% 
+  ggplot(aes(duration_min,
+    mean_precipitation_mm,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average duration of the trips in minutes",
+    y = "Amount of precipitation in milimeters",
+    title = "Average duration in minutes and amount of precipitation",
+    subtitle = str_wrap(
+      "There is no trend between the amount of precipitation and the average duration of the trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+```{r}
+bestdata %>% group_by(date, workingday, mean_temperature) %>% summarise(duration_min=mean(duration_min)) %>% filter(duration_min <= 60) %>% 
+  ggplot(aes(duration_min,
+    mean_temperature,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average duration of the trips in minutes",
+    y = "Average temperature",
+    title = "Average duration in minutes and average temperature",
+    subtitle = str_wrap(
+      "There is no trend between the average temperature and the average duration of the trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+```{r}
+bestdata %>% group_by(date, workingday, mean_wind_speed) %>% summarise(duration_min=mean(duration_min)) %>% filter(duration_min <= 60) %>% 
+  ggplot(aes(duration_min,
+    mean_wind_speed,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average duration of the trips in minutes",
+    y = "Average wind speed",
+    title = "Average duration in minutes and average wind speed",
+    subtitle = str_wrap(
+      "There is no trend between the average wind speed and the average duration of the trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_visibility) %>% summarise(duration_min=mean(duration_min)) %>% filter(duration_min <= 60) %>% 
+  ggplot(aes(duration_min,
+    mean_visibility,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average duration of the trips in minutes",
+    y = "Average visibility",
+    title = "Average duration in minutes and average visibility",
+    subtitle = str_wrap(
+      "There is no trend between the average visibility and the average duration of the trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+
+After having analysed the weather, we constate that humidity, precipitation, temperature, wind and visibility do not influence the number of trips or their average duration. We will try ton confirm those results in the modeling part. 
+
+Also, it allowed us to see that the average of duration of the trips is bigger during the weekend than during the working days. This is completely likey that peope mainly use the bikes during the working day in order to go to their workplace. On the other hand, during the weekend, people use the bikes to go on an excursion. 
 
 
-```{r contribution, fig.height=15, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+## Modeling
 
-set.seed(234)
-index <- sample(x=c(1,2), size=nrow(AFC), replace=TRUE, prob=c(0.75,0.25)) # 1==training set, 2==test set
-dat.tr <- AFC[index==1,]
-dat.te <- AFC[index==2,]
+In this part, we will create a model in oder to predict the number of trips per day and per hour across all stations. 
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#We prepare our data for the modeling part. We need to transform all non-numeric values into numeric ones
+modeling <- bestdata %>% mutate(day = day(date), month = month(date), workingday_num = is.bizday(date, "QuantLib/UnitedStates"))
+modeling$workingday_num <- as.numeric(modeling$workingday_num)
+modeling$weekday_num <- as.numeric(modeling$weekday)
+
+modeling <- modeling %>% select(-weekday,-workingday)
+modeling <- ungroup(modeling)
+modeling <- modeling %>% select(-date)
+
+```
+
+We split the data into two parts: 
+
+- Training set (75% of the data)
+- Testing set  (25% of the data)
+
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
+set.seed(123)
+index <- sample(x=c(1,2), size=nrow(modeling), replace=TRUE, prob=c(0.75,0.25)) # 1==training set, 2==test set
+dat.tr <- modeling[index==1,]
+dat.te <- modeling[index==2,]
 # 1==training set, 2==test set
 ```
 
-```{r}
+We use a random forest in order to make the predictions of the variable "count" which is the number of trips per day and per hour across all stations.
+
+```{r fig.width=12, warning=FALSE, message=FALSE}
 library(ranger)
+#We use the ranger package to build a random forest
+
+randomforest<- ranger(count ~ year + hour + mean_temperature + mean_wind_speed + mean_visibility + mean_humidity + mean_precipitation_mm + weekday_num + workingday_num + day + month ,
+    data = dat.tr,
+    importance = "impurity")
+```
 
 
-ranger.rf2 <- ranger(count~ year + hour + mean_temperature + mean_wind_speed + mean_visibility + mean_humidity+ mean_precipitation_mm + weekday_num+ workingday_num + day + month ,  data = dat.tr, importance = "impurity")
+Below, we plot the variable importance of our random forest. We observe that the variable "hour" is the most important one. Thus, the number of trips across all stations for each day depends on the hour of the day. 
 
-imp.df <- data.frame(variable=names(importance(ranger.rf2)),
-                     importance=importance(ranger.rf2))
+```{r fig.width=12, warning=FALSE, message=FALSE}
+#We diplay the importance of the variables in our random forest. Hour is the most important variable though. 
+imp.df <- data.frame(variable = names(importance(randomforest)),
+                     importance = importance(randomforest))
 ggplot(imp.df, 
        aes(x=reorder(variable,importance), y=importance,fill=importance))+
   geom_bar(stat="identity", position="dodge") + 
@@ -484,20 +902,24 @@ ggplot(imp.df,
     panel.grid.minor = element_line(color = "grey", size = 0.1)
   ) +
   theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
-  ggpubr::rotate_x_text(angle = 360, hjust = 0.5) 
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
+```
 
-rf2.pred.tr <- ranger.rf2$predictions
-rf2.pred.te <- predict(ranger.rf2, data=dat.te)$predictions
 
-PredictionRF <- data.frame(PredictionRF=rf2.pred.te)
+```{r fig.width=12, warning=FALSE, message=FALSE}
+rf.pred.tr <- randomforest$predictions
+rf.pred.te <- predict(randomforest, data=dat.te)$predictions
 
-plot(dat.te$count ~ rf2.pred.te, 
+Prediction_rf <- data.frame(Prediction_rf=rf.pred.te)
+
+plot(dat.te$count ~ rf.pred.te, 
      pch = 20, 
      xlab="Predictions", 
-     ylab="Duree reelle",
-     main = "Observations prédites comparées aux observations réelles") + 
-  abline(0, 1, col = "red", size = 3)
+     ylab="Observations",
+     main = "Predictions versus observations") + 
+  abline(0, 1, col = "red")
 
 ```
 
+With the previous plot, we observe a linear trend but the prediction is less accurate for smaller values (until around 80 trips). However, the prediction for larger values (higher number of trips) is quite good.
 
