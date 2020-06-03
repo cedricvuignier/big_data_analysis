@@ -923,3 +923,170 @@ plot(dat.te$count ~ rf.pred.te,
 
 With the previous plot, we observe a linear trend but the prediction is less accurate for smaller values (until around 80 trips). However, the prediction for larger values (higher number of trips) is quite good.
 
+
+----------------------------------------------------------------------------------------------------------------------------
+
+Below, we try to adjust our random forest by removing the variables "hour" and "workingday" in order to see how the model reacts. 
+
+
+
+```{r}
+library(ranger)
+randomforestNEW<- ranger(count ~ year + mean_temperature + mean_wind_speed + mean_visibility + mean_humidity + mean_precipitation_mm + weekday_num + day + month ,
+    data = dat.tr,
+    importance = "impurity")
+```
+
+```{r}
+imp.dfNEW <- data.frame(variable = names(importance(randomforestNEW)),
+                     importance = importance(randomforestNEW))
+ggplot(imp.dfNEW, 
+       aes(x=reorder(variable,importance), y=importance,fill=importance))+
+  geom_bar(stat="identity", position="dodge") + 
+  coord_flip()+
+  ylab("Variable Importance")+
+  xlab("")+
+  ggtitle("Information Value Summary")+
+  guides(fill=F) +
+  theme(
+    axis.text.x = element_text(
+      face = "bold",
+      color = "#993333",
+      size = 12,
+      angle = 45
+    ),
+    axis.text.y = element_text(face = "bold", size = 10),
+    panel.grid.minor = element_line(color = "grey", size = 0.1)
+  ) +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  ggpubr::rotate_x_text(angle = 360, hjust = 0.5)
+```
+
+As we can see, the weekday is now the most important variable followed by the year. The weather is still not playing an important role in our model. 
+
+```{r}
+rf.pred.trNEW <- randomforestNEW$predictions
+rf.pred.teNEW <- predict(randomforestNEW, data=dat.te)$predictions
+
+Prediction_rfNEW <- data.frame(Prediction_rf=rf.pred.teNEW)
+
+plot(dat.te$count ~ rf.pred.teNEW, 
+     pch = 20, 
+     xlab="Predictions", 
+     ylab="Observations",
+     main = "Predictions versus observations") + 
+  abline(0, 1, col = "red")
+
+```
+
+As we can see, our predicitons are really less accurate without the variable "hour". 
+
+
+TEMPERATURE, VISIBILITY AND WIND 
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_wind_speed) %>% summarise(count=mean(count))  %>% 
+  ggplot(aes(count,
+    mean_wind_speed,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average number of trips",
+    y = "Average wind speed",
+    title = "Average number of trips and average wind speed",
+    subtitle = str_wrap(
+      "There is no trend between the average wind speed and the average number of trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+No realationship between number of trips and wind speed
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_temperature) %>% summarise(count=mean(count)) %>% 
+  ggplot(aes(count,
+    mean_temperature,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average number of trips",
+    y = "Average temperature",
+    title = "Average number of trips and average temperature",
+    subtitle = str_wrap(
+      "There is no trend between the average temperature and the average number of trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+No realationship between number of trips and temperature.
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_visibility) %>% summarise(count=mean(count))  %>% 
+  ggplot(aes(count,
+    mean_visibility,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average number of trips",
+    y = "Average visibility",
+    title = "Average number of trips and average visibility",
+    subtitle = str_wrap(
+      "There is no trend between the average visibility and the average number of trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+```
+No realationship between number of trips and visibility.
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_precipitation_mm) %>% summarise(count=mean(count)) %>% 
+  ggplot(aes(count,
+    mean_precipitation_mm,
+    group = 1,
+    colour = workingday,
+    text = paste('<br> workingday:', workingday)
+  )) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, size = 0.4) +
+  labs (
+    x = "Average number of trips",
+    y = "Amount of precipitation in milimeters",
+    title = "Average number of trips and amount of precipitation",
+    subtitle = str_wrap(
+      "There is no trend between the amount of precipitation and the average number of trips"
+    )
+  ) +
+  theme() +
+  theme(panel.grid.major = element_line(color = "grey", size = 0.1)) +
+  scale_color_viridis(discrete = TRUE) + theme_bw()
+
+```
+No relationship. But we can see that there are few rainy days in San Fransisco. Only 83 days from September 2013 to August 2015.
+
+As an indication, Switzerland experienced 124 rainy days only in 2014. It is therefore difficult to know if the amount of precipitation decreases the number of bicycle trips in San Fransico since this city is favorable for the use of bicycles due to its little rainy climate.
+
+
+
+```{r}
+bestdata %>% group_by(date, workingday, mean_precipitation_mm) %>% filter(mean_precipitation_mm >0) %>% summarise(count=mean(count)) 
+```
+
+
